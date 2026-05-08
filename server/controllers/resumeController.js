@@ -1,5 +1,7 @@
 import { askAI } from "../services/aiService.js";
 import { ResumeSchema } from "../utils/resumeSchema.js";
+import { PDFParse } from "pdf-parse";
+import fs from 'fs';
 
 const SYSTEM_PROMPT = `you are expert resume parser. Your task is to extract structured data from raw resume text into strict JSON schema.`;
 const FEW_SHOT_EXAMPLES = `### Example 1 — Academic/CV style
@@ -165,4 +167,60 @@ export const parseResume = async (req, res) => {
     } catch (error) {
         res.status(500).json({message: error.message});
     }
+}
+
+
+export const parseResumeFromPDF = async (req,res) => {
+  try {
+    if(!req.file){
+      return res.status(400).json({message: "PDF file required"});
+    }
+
+    const dataBuffer = fs.readFileSync(req.file.path);
+    const parser = new PDFParse({data: dataBuffer});
+    const parsed = await parser.getText();
+    const resumeText = (parsed.text ||"").trim();
+
+    if(resumeText.length < 50) {
+      return res.status(400).json({
+        message: "PDF has no extractable text - looks scanned. Please use a text-bases PDF."
+      });
+    }
+
+
+      try {
+        if(!resumeText || !resumeText.trim()) {
+            return res.status(400).json({message: "resumeText is required"});
+        }
+
+        const userPrompt = `${FEW_SHOT_EXAMPLES}\n\nNow extract from ths resume:\n\n${resumeText}`;
+        const raw = await askAI(userPrompt, SYSTEM_PROMPT, "{");
+
+        let parsed;
+
+        try {
+            parsed = JSON.parse(raw);
+        } catch (error) {
+            return res.status(500).json({
+                message: "LLM returned invalid JSON",
+                raw
+            });
+        }
+
+        const result = ResumeSchema.safeParse(parsed);
+        if(!result.success){
+            return res.status(500).json({
+                message: "Validation failed",
+                errors: result.error.flatten()
+            });
+        }
+
+        res.json({resume: result.data});
+    } catch (error) {
+        res.status(500).json({message: error.message});
+    }
+
+  } catch (error) {
+    res.status(500).json({message : error.message});
+  }
 }
